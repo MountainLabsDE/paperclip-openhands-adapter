@@ -228,7 +228,7 @@ export async function testEnvironment(
       })();
       const probeModel = configuredModel;
 
-      const args = ["--headless", "--override-with-envs", "-t", "Respond with hello."];
+      const args = ["--headless", "--json", "--override-with-envs", "-t", "Respond with hello."];
       if (extraArgs.length > 0) args.push(...extraArgs);
 
       try {

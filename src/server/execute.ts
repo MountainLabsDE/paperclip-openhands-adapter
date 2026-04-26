@@ -297,7 +297,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   };
 
   const buildArgs = (resumeSessionId: string | null) => {
-    const args = ["--headless", "--override-with-envs", "-t", prompt];
+    const args = ["--headless", "--json", "--override-with-envs", "-t", prompt];
     if (resumeSessionId) args.push("--resume", resumeSessionId);
     if (extraArgs.length > 0) args.push(...extraArgs);
     return args;

@@ -1,24 +1,63 @@
 import { asNumber, asString, parseJson, parseObject } from "@paperclipai/adapter-utils/server-utils";
 
-function errorText(value: unknown): string {
-  if (typeof value === "string") return value;
-  const rec = parseObject(value);
-  const message = asString(rec.message, "").trim();
-  if (message) return message;
-  const data = parseObject(rec.data);
-  const nestedMessage = asString(data.message, "").trim();
-  if (nestedMessage) return nestedMessage;
-  const name = asString(rec.name, "").trim();
-  if (name) return name;
-  const code = asString(rec.code, "").trim();
-  if (code) return code;
-  try {
-    return JSON.stringify(rec);
-  } catch {
-    return "";
-  }
+/** Extract text from an OpenHands llm_message.content array. */
+function extractContentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map((item) => asString(item.text, "").trim())
+    .filter(Boolean)
+    .join("\n");
 }
 
+/** Strip ANSI escape sequences from a string. */
+function stripAnsi(text: string): string {
+  return text
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+    .replace(/\x1b\[\?[0-9]*[lh]/g, "")
+    .replace(/\x1b\[[A-HJKST]/g, "");
+}
+
+/**
+ * Extract a balanced JSON object from text that may contain trailing noise.
+ *
+ * OpenHands `--json` output includes human-readable text after each JSON event
+ * (e.g. "Agent is working").  This function finds the first `{` and walks the
+ * string tracking brace depth to find where the JSON object ends.
+ */
+function extractJsonObject(text: string): unknown {
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) { escape = false; continue; }
+    if (ch === "\\") { if (inString) escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        return parseJson(text.slice(start, i + 1));
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse OpenHands `--json` output.
+ *
+ * The `--json` flag emits `--JSON Event--` markers followed by multi-line JSON
+ * objects, interspersed with human-readable status text like "Agent is working".
+ * After all events the CLI prints a "Conversation ID: <uuid>" line.
+ */
 export function parseOpenHandsJsonl(stdout: string) {
   let sessionId: string | null = null;
   const messages: string[] = [];
@@ -30,57 +69,63 @@ export function parseOpenHandsJsonl(stdout: string) {
   };
   let costUsd = 0;
 
-  for (const rawLine of stdout.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) continue;
+  // Extract Conversation ID from the tail of the output (e.g. "Conversation ID: abc123def456")
+  // OpenHands uses 32-char hex IDs without hyphens, but also match UUID format just in case
+  const convIdMatch = stdout.match(/Conversation ID:\s*([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}|[0-9a-f]{32})/i);
+  if (convIdMatch) sessionId = convIdMatch[1];
 
-    const event = parseJson(line);
-    if (!event) continue;
+  // Strip ANSI codes so JSON markers/braces are clean
+  const cleaned = stripAnsi(stdout);
 
-    // OpenHands uses different field names, try multiple variants
-    const currentSessionId = 
-      asString(event.sessionId, "").trim() ||
-      asString(event.sessionID, "").trim() ||
-      asString(event.session_id, "").trim();
-    if (currentSessionId) sessionId = currentSessionId;
+  // Split on the `--JSON Event--` separator and parse each block
+  const blocks = cleaned.split(/--JSON Event--\s*/);
+  for (const block of blocks) {
+    const trimmed = block.trim();
+    if (!trimmed) continue;
 
-    const type = asString(event.type, "") || asString(event.event_type, "");
+    // Each block may contain JSON followed by status text; extract just the JSON
+    const event = extractJsonObject(trimmed);
+    if (!event || typeof event !== "object") continue;
 
-    // Parse message/thinking text
-    if (type === "message" || type === "thinking" || type === "text") {
-      const text = asString(event.message, "").trim() || 
-                   asString(event.text, "").trim() ||
-                   asString(event.content, "").trim();
-      if (text) messages.push(text);
-      continue;
-    }
+    const kind = asString((event as Record<string, unknown>).kind, "").trim();
 
-    // Parse token usage from step completion
-    if (type === "step_completion" || type === "step_finish" || type === "completion") {
-      const tokens = parseObject(event.tokens) || parseObject(event.usage);
-      const cache = parseObject(tokens.cache) || parseObject(tokens.cached);
-      usage.inputTokens += asNumber(tokens.input, 0) || asNumber(tokens.input_tokens, 0);
-      usage.cachedInputTokens += asNumber(cache.read, 0) || asNumber(cache.cached_tokens, 0) || asNumber(tokens.cached_input_tokens, 0);
-      usage.outputTokens += asNumber(tokens.output, 0) || asNumber(tokens.output_tokens, 0);
-      costUsd += asNumber(event.cost, 0) || asNumber(event.cost_usd, 0);
-      continue;
-    }
-
-    // Parse tool errors
-    if (type === "tool_use" || type === "tool_call") {
-      const state = parseObject(event.state) || parseObject(event.status);
-      if (asString(state.status, "") === "error" || asString(state, "") === "error") {
-        const text = asString(state.error, "").trim() || 
-                     asString(event.error, "").trim();
-        if (text) errors.push(text);
+    // --- Agent messages (assistant replies) ---
+    if (kind === "MessageEvent") {
+      const source = asString((event as Record<string, unknown>).source, "").trim();
+      const llmMessage = parseObject((event as Record<string, unknown>).llm_message);
+      if (llmMessage && source === "agent") {
+        const text = extractContentText(llmMessage.content).trim();
+        if (text) messages.push(text);
       }
       continue;
     }
 
-    // Parse general errors
-    if (type === "error" || type === "failure") {
-      const text = errorText(event.error ?? event.message ?? event.reason).trim();
-      if (text) errors.push(text);
+    // --- Observation errors ---
+    if (kind === "ObservationEvent") {
+      const observation = parseObject((event as Record<string, unknown>).observation);
+      if (observation) {
+        const isError = asString(observation.is_error, "") === "true" ||
+          observation.is_error === true;
+        if (isError) {
+          const text = extractContentText(observation.content).trim();
+          if (text) errors.push(text);
+        }
+      }
+      continue;
+    }
+
+    // --- Legacy / fallback: step_completion with token usage ---
+    const type = asString((event as Record<string, unknown>).type, "") ||
+      asString((event as Record<string, unknown>).event_type, "");
+    if (type === "step_completion" || type === "step_finish" || type === "completion") {
+      const tokens = parseObject((event as Record<string, unknown>).tokens) ||
+        parseObject((event as Record<string, unknown>).usage);
+      const cache = parseObject(tokens.cache) || parseObject(tokens.cached);
+      usage.inputTokens += asNumber(tokens.input, 0) || asNumber(tokens.input_tokens, 0);
+      usage.cachedInputTokens += asNumber(cache.read, 0) || asNumber(cache.cached_tokens, 0) || asNumber(tokens.cached_input_tokens, 0);
+      usage.outputTokens += asNumber(tokens.output, 0) || asNumber(tokens.output_tokens, 0);
+      costUsd += asNumber((event as Record<string, unknown>).cost, 0) ||
+        asNumber((event as Record<string, unknown>).cost_usd, 0);
       continue;
     }
   }
