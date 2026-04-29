@@ -30,6 +30,33 @@ import { removeMaintainerOnlySkillSymlinks } from "@paperclipai/adapter-utils/se
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Detect whether the child process was terminated by an external signal
+ * (SIGTERM / SIGHUP) sent by the Paperclip supervisor to cancel a run.
+ *
+ * When Paperclip cancels a run it sends SIGTERM to the process group.
+ * Hermes' Python signal handler catches it and raises `KeyboardInterrupt`,
+ * which causes the process to exit with code 1 and a traceback in stderr.
+ * We detect this pattern so we can treat the exit as a clean cancellation
+ * rather than a crash.
+ */
+function isSignalCancelled(
+  exitCode: number | null,
+  signal: string | null,
+  stderr: string,
+): boolean {
+  if (signal === "SIGTERM" || signal === "SIGHUP") return true;
+  // Python raises KeyboardInterrupt when its SIGTERM/SIGHUP handler fires.
+  // The process exits with code 1 (or sometimes 130 = 128+SIGINT) and the
+  // traceback is written to stderr.  Match the common patterns.
+  if (exitCode !== null && exitCode !== 0) {
+    // Look for the classic Python traceback ending in KeyboardInterrupt
+    // caused by _signal_handler_q or similar signal-handler frames.
+    if (/KeyboardInterrupt\b/.test(stderr)) return true;
+  }
+  return false;
+}
+
 function firstNonEmptyLine(text: string): string {
   return (
     text
@@ -175,6 +202,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (typeof value === "string") env[key] = value;
   }
 
+  // Inject the Paperclip API token so the agent can call back to update issue status
+  if (!hasExplicitApiKey && authToken) {
+    env.PAPERCLIP_API_KEY = authToken;
+  }
+
   // Set LLM environment variables for OpenHands
   if (model) {
     env.LLM_MODEL = model;
@@ -212,9 +244,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     runtimeSessionId.length > 0 &&
     (runtimeSessionCwd.length === 0 || path.resolve(runtimeSessionCwd) === path.resolve(cwd));
 
+  ensurePathInEnv(env);
   await ensureCommandResolvable(command, cwd, env);
   const resolvedCommand = await resolveCommandForLogs(command, cwd, env);
-  ensurePathInEnv(env);
   const loggedEnv = buildInvocationEnvForLogs(env);
 
   const sessionId = canResumeSession ? runtimeSessionId : null;
@@ -297,7 +329,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   };
 
   const buildArgs = (resumeSessionId: string | null) => {
-    const args = ["--headless", "--json", "--override-with-envs", "-t", prompt];
+    const args = ["--headless", "--json", "--exit-without-confirmation", "--override-with-envs", "-t", prompt];
     if (resumeSessionId) args.push("--resume", resumeSessionId);
     if (extraArgs.length > 0) args.push(...extraArgs);
     return args;
@@ -369,12 +401,47 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const parsedError = typeof attempt.parsed.errorMessage === "string" ? attempt.parsed.errorMessage.trim() : "";
     const stderrLine = firstNonEmptyLine(attempt.proc.stderr);
     const rawExitCode = attempt.proc.exitCode;
+    const modelId = model || null;
+
+    // When the Paperclip supervisor cancels a run it sends SIGTERM to the
+    // process group.  Hermes catches the signal and raises KeyboardInterrupt,
+    // producing a non-zero exit code and a traceback in stderr.  Detect this
+    // pattern and return a clean "cancelled" result so the run is not marked
+    // as a crash.  Preserve any partial session data captured before the
+    // signal arrived.
+    if (isSignalCancelled(rawExitCode, attempt.proc.signal, attempt.proc.stderr)) {
+      return {
+        exitCode: 0,
+        signal: attempt.proc.signal,
+        timedOut: false,
+        errorMessage: null,
+        usage: {
+          inputTokens: attempt.parsed.usage.inputTokens,
+          outputTokens: attempt.parsed.usage.outputTokens,
+          cachedInputTokens: attempt.parsed.usage.cachedInputTokens,
+        },
+        sessionId: resolvedSessionId,
+        sessionParams: resolvedSessionParams,
+        sessionDisplayId: resolvedSessionId,
+        provider: parseModelProvider(modelId),
+        biller: resolveOpenHandsBiller(env, parseModelProvider(modelId)),
+        model: modelId,
+        billingType: "unknown",
+        costUsd: attempt.parsed.costUsd,
+        resultJson: {
+          stdout: attempt.proc.stdout,
+          stderr: attempt.proc.stderr,
+        },
+        summary: attempt.parsed.summary || undefined,
+        clearSession: Boolean(clearSessionOnMissingSession && !attempt.parsed.sessionId),
+      };
+    }
+
     const synthesizedExitCode = parsedError && (rawExitCode ?? 0) === 0 ? 1 : rawExitCode;
     const fallbackErrorMessage =
       parsedError ||
       stderrLine ||
       `OpenHands exited with code ${synthesizedExitCode ?? -1}`;
-    const modelId = model || null;
 
     return {
       exitCode: synthesizedExitCode,
@@ -405,7 +472,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const initial = await runAttempt(sessionId);
   const initialFailed =
-    !initial.proc.timedOut && ((initial.proc.exitCode ?? 0) !== 0 || Boolean(initial.parsed.errorMessage));
+    !initial.proc.timedOut &&
+    !isSignalCancelled(initial.proc.exitCode, initial.proc.signal, initial.proc.stderr) &&
+    ((initial.proc.exitCode ?? 0) !== 0 || Boolean(initial.parsed.errorMessage));
   if (
     sessionId &&
     initialFailed &&

@@ -1,10 +1,23 @@
+import type { ServerAdapterModule } from "@paperclipai/adapter-utils";
+import {
+  execute,
+  sessionCodec,
+  listSkills,
+  syncSkills,
+  testEnvironment,
+  listModels,
+} from "./server/index.js";
+
 export const type = "openhands_local";
 export const label = "OpenHands (local)";
 
-export const DEFAULT_OPENHANDS_LOCAL_MODEL = "openai/mountainlabs-main";
+export const DEFAULT_OPENHANDS_LOCAL_MODEL = "openai/emma-4.7";
 
 export const models: Array<{ id: string; label: string }> = [
-  { id: DEFAULT_OPENHANDS_LOCAL_MODEL, label: DEFAULT_OPENHANDS_LOCAL_MODEL },
+  { id: "openai/emma-4.7", label: "openai/emma-4.7" },
+  { id: "openai/emma-5", label: "openai/emma-5" },
+  { id: "openai/emma-free", label: "openai/emma-free" },
+  { id: "openai/emma-4.6v", label: "openai/emma-4.6v" },
   { id: "openai/gpt-4o", label: "openai/gpt-4o" },
   { id: "openai/gpt-4o-mini", label: "openai/gpt-4o-mini" },
   { id: "openai/gpt-4-turbo", label: "openai/gpt-4-turbo" },
@@ -12,6 +25,20 @@ export const models: Array<{ id: string; label: string }> = [
   { id: "anthropic/claude-3.5-sonnet", label: "anthropic/claude-3.5-sonnet" },
   { id: "google/gemini-2.5-pro", label: "google/gemini-2.5-pro" },
 ];
+
+export function createServerAdapter(): ServerAdapterModule {
+  return {
+    type,
+    execute,
+    testEnvironment,
+    listSkills,
+    syncSkills,
+    sessionCodec,
+    models,
+    listModels,
+    agentConfigurationDoc,
+  };
+}
 
 export const agentConfigurationDoc = `# openhands_local agent configuration
 
