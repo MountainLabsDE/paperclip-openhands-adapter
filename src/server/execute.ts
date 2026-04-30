@@ -244,10 +244,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     runtimeSessionId.length > 0 &&
     (runtimeSessionCwd.length === 0 || path.resolve(runtimeSessionCwd) === path.resolve(cwd));
 
-  ensurePathInEnv(env);
-  await ensureCommandResolvable(command, cwd, env);
-  const resolvedCommand = await resolveCommandForLogs(command, cwd, env);
-  const loggedEnv = buildInvocationEnvForLogs(env);
+  const runtimeEnv = Object.fromEntries(
+    Object.entries(ensurePathInEnv({ ...process.env, ...env })).filter(
+      (e): e is [string, string] => typeof e[1] === "string",
+    ),
+  );
+  await ensureCommandResolvable(command, cwd, runtimeEnv);
+  const resolvedCommand = await resolveCommandForLogs(command, cwd, runtimeEnv);
+  const loggedEnv = buildInvocationEnvForLogs(env, {
+    runtimeEnv,
+    includeRuntimeKeys: ["HOME"],
+    resolvedCommand,
+  });
 
   const sessionId = canResumeSession ? runtimeSessionId : null;
   if (runtimeSessionId && !canResumeSession) {
@@ -353,7 +361,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     const proc = await runChildProcess(runId, command, args, {
       cwd,
-      env,
+      env: runtimeEnv,
       stdin: "",
       timeoutSec,
       graceSec,
