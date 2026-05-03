@@ -5,3 +5,13 @@ dist
 *.tgz
 package-lock.json
 ql -*
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Secrets
+*.pem
+*.key
+*.secret
