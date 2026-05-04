@@ -2,15 +2,15 @@
   "name": "@paperclipai/adapter-openhands-local",
   "version": "0.1.0",
   "license": "MIT",
-  "homepage": "https://github.com/paperclipai/paperclip",
+  "homepage": "https://github.com/MountainLabsDE/paperclip-openhands-adapter",
   "bugs": {
-    "url": "https://github.com/paperclipai/paperclip/issues"
+    "url": "https://github.com/MountainLabsDE/paperclip-openhands-adapter/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/paperclipai/paperclip",
-    "directory": "packages/adapters/openhands-local"
+    "url": "https://github.com/MountainLabsDE/paperclip-openhands-adapter.git"
   },
+  "description": "Paperclip adapter for OpenHands (All-Hands-AI) - enables AI agents to execute code in sandboxed environments",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

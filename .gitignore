@@ -1,3 +1,6 @@
+.env
+.env.*
+!.env.example
 node_modules
 dist
 *.log
@@ -5,13 +8,15 @@ dist
 *.tgz
 package-lock.json
 ql -*
-
-# Environment files
-.env
-.env.*
-!.env.example
+coverage/
 
 # Secrets
 *.pem
 *.key
 *.secret
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
