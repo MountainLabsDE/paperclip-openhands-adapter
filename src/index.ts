@@ -11,19 +11,16 @@ import {
 export const type = "openhands_local";
 export const label = "OpenHands (local)";
 
-export const DEFAULT_OPENHANDS_LOCAL_MODEL = "openai/emma-4.7";
+export const DEFAULT_OPENHANDS_LOCAL_MODEL = "openai/mountainlabs-main";
 
 export const models: Array<{ id: string; label: string }> = [
-  { id: "openai/emma-4.7", label: "openai/emma-4.7" },
-  { id: "openai/emma-5", label: "openai/emma-5" },
-  { id: "openai/emma-free", label: "openai/emma-free" },
-  { id: "openai/emma-4.6v", label: "openai/emma-4.6v" },
-  { id: "openai/gpt-4o", label: "openai/gpt-4o" },
-  { id: "openai/gpt-4o-mini", label: "openai/gpt-4o-mini" },
-  { id: "openai/gpt-4-turbo", label: "openai/gpt-4-turbo" },
-  { id: "anthropic/claude-sonnet-4-5", label: "anthropic/claude-sonnet-4-5" },
-  { id: "anthropic/claude-3.5-sonnet", label: "anthropic/claude-3.5-sonnet" },
-  { id: "google/gemini-2.5-pro", label: "google/gemini-2.5-pro" },
+  { id: "openai/mountainlabs-main", label: "mountainlabs-main (default, high quality)" },
+  { id: "openai/mountainlabs-main-5", label: "mountainlabs-main-5 (GPT-4.1 level)" },
+  { id: "openai/mountainlabs-fast", label: "mountainlabs-fast (speed optimized)" },
+  { id: "openai/mountainlabs-free-fast", label: "mountainlabs-free-fast (free tier)" },
+  { id: "openai/mountainlabs-4.6v", label: "mountlabs-4.6v (vision capable)" },
+  { id: "openai/mountainlabs-image-free", label: "mountainlabs-image-free (image gen, free)" },
+  { id: "openai/Ganjo", label: "Ganjo (custom agent model)" },
 ];
 
 export function createServerAdapter(): ServerAdapterModule {
@@ -57,7 +54,7 @@ Don't use when:
 Core fields:
 - cwd (string, optional): default absolute working directory fallback for the agent process (created if missing when possible)
 - instructionsFilePath (string, optional): absolute path to a markdown instructions file prepended to the run prompt
-- model (string, required): OpenHands model id in provider/model format (for example anthropic/claude-sonnet-4-5)
+- model (string, required): OpenHands model id in provider/model format (for example openai/mountainlabs-main)
 - promptTemplate (string, optional): run prompt template
 - command (string, optional): defaults to "openhands"
 - extraArgs (string[], optional): additional CLI args
