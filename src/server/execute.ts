@@ -119,6 +119,73 @@ async function ensureOpenHandsSkillsInjected(
   }
 }
 
+/**
+ * Build a prompt section that teaches the OpenHands agent how to interact
+ * with the Paperclip API (post comments, update issue status, etc.).
+ *
+ * OpenHands agents run in a sandbox and need explicit instructions on how to
+ * use the Paperclip API.  The environment variables PAPERCLIP_API_URL and
+ * PAPERCLIP_API_KEY are already injected by the adapter, but the prompt must
+ * tell the agent how to use them.
+ */
+function buildPaperclipApiInstructions(ctx: {
+  wakeTaskId: string | null;
+  companyId: string;
+  agentId: string;
+}): string {
+  const lines = [
+    "## Paperclip API",
+    "",
+    "You have access to the Paperclip API for issue management. Use it to post progress comments, update issue status, and create child issues.",
+    "",
+    "### Environment variables (already set in your environment)",
+    "- `PAPERCLIP_API_URL` – API base URL (e.g. http://localhost:3100/api)",
+    "- `PAPERCLIP_API_KEY` – Bearer token for authorization",
+    `- PAPERCLIP_TASK_ID – current issue/task ID${ctx.wakeTaskId ? ` (${ctx.wakeTaskId})` : ""}`,
+    "",
+    "### Common API patterns",
+    "",
+    "**Post a comment on the current issue:**",
+    "```bash",
+    'curl -s -X POST "$PAPERCLIP_API_URL/issues/$PAPERCLIP_TASK_ID/comments" \\',
+    '  -H "Authorization: Bearer $PAPERCLIP_API_KEY" \\',
+    '  -H "Content-Type: application/json" \\',
+    '  -d \'{"body": "Your progress update here"}\'',
+    "```",
+    "",
+    "**Update issue status:**",
+    "```bash",
+    'curl -s -X PATCH "$PAPERCLIP_API_URL/issues/$PAPERCLIP_TASK_ID" \\',
+    '  -H "Authorization: Bearer $PAPERCLIP_API_KEY" \\',
+    '  -H "Content-Type: application/json" \\',
+    '  -d \'{"status": "done"}\'   # or: "in_progress", "todo", "blocked"',
+    "```",
+    "",
+    "**Create a child issue:**",
+    "```bash",
+    'curl -s -X POST "$PAPERCLIP_API_URL/companies/' + ctx.companyId + '/issues" \\',
+    '  -H "Authorization: Bearer $PAPERCLIP_API_KEY" \\',
+    '  -H "Content-Type: application/json" \\',
+    '  -d \'{"title": "Child task title", "parentId": "' + (ctx.wakeTaskId ?? "") + '", "priority": "high"}\'',
+    "```",
+    "",
+    "**Mark yourself as working on an issue:**",
+    "```bash",
+    'curl -s -X PATCH "$PAPERCLIP_API_URL/issues/$PAPERCLIP_TASK_ID" \\',
+    '  -H "Authorization: Bearer $PAPERCLIP_API_KEY" \\',
+    '  -H "Content-Type: application/json" \\',
+    '  -d \'{"status": "in_progress", "assigneeAgentId": "' + ctx.agentId + '"}\'',
+    "```",
+    "",
+    "### Important rules",
+    "- Always post a comment when you complete work or make significant progress.",
+    "- Always update the issue status (e.g., to `done` when finished, `blocked` if you cannot proceed).",
+    "- Include a summary of what you did in your completion comment.",
+    "- Use `$PAPERCLIP_API_URL` and `$PAPERCLIP_API_KEY` environment variables (they are already set).",
+  ];
+  return lines.join("\n");
+}
+
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const { runId, agent, runtime, config, context, onLog, onMeta, onSpawn, authToken } = ctx;
 
@@ -320,12 +387,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const shouldUseResumeDeltaPrompt = Boolean(sessionId) && wakePrompt.length > 0;
   const renderedPrompt = shouldUseResumeDeltaPrompt ? "" : renderTemplate(promptTemplate, templateData);
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
+  const paperclipApiInstructions = buildPaperclipApiInstructions({
+    wakeTaskId,
+    companyId: agent.companyId,
+    agentId: agent.id,
+  });
   const prompt = joinPromptSections([
     instructionsPrefix,
     renderedBootstrapPrompt,
     wakePrompt,
     sessionHandoffNote,
     renderedPrompt,
+    paperclipApiInstructions,
   ]);
   const promptMetrics = {
     promptChars: prompt.length,
