@@ -18,7 +18,7 @@ export const models: Array<{ id: string; label: string }> = [
   { id: "openai/mountainlabs-main-5", label: "mountainlabs-main-5 (GPT-4.1 level)" },
   { id: "openai/mountainlabs-fast", label: "mountainlabs-fast (speed optimized)" },
   { id: "openai/mountainlabs-free-fast", label: "mountainlabs-free-fast (free tier)" },
-  { id: "openai/mountainlabs-4.6v", label: "mountlabs-4.6v (vision capable)" },
+  { id: "openai/mountainlabs-4.6v", label: "mountainlabs-4.6v (vision capable)" },
   { id: "openai/mountainlabs-image-free", label: "mountainlabs-image-free (image gen, free)" },
   { id: "openai/Ganjo", label: "Ganjo (custom agent model)" },
 ];

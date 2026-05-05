@@ -4,7 +4,6 @@ import type {
   AdapterEnvironmentTestResult,
 } from "@paperclipai/adapter-utils";
 import {
-  asBoolean,
   asString,
   asStringArray,
   parseObject,
@@ -13,7 +12,7 @@ import {
   ensurePathInEnv,
   runChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
-import { discoverOpenHandsModelsWithStatus, ensureOpenHandsModelConfiguredAndAvailable } from "./models.js";
+import { ensureOpenHandsModelConfiguredAndAvailable } from "./models.js";
 import { parseOpenHandsJsonl } from "./parse.js";
 import { prepareOpenHandsRuntimeConfig } from "./runtime-config.js";
 
@@ -85,7 +84,7 @@ export async function testEnvironment(
   // Check for API key configuration
   const llmApiKey = asString(envConfig.LLM_API_KEY ?? envConfig.OPENAI_API_KEY, "");
   const llmBaseUrl = asString(envConfig.LLM_BASE_URL ?? envConfig.OPENAI_API_BASE, "");
-  
+
   if (!llmApiKey) {
     checks.push({
       code: "openhands_api_key_missing",
@@ -94,7 +93,7 @@ export async function testEnvironment(
       hint: "Set LLM_API_KEY (or OPENAI_API_KEY) in the agent environment variables.",
     });
   }
-  
+
   if (!llmBaseUrl) {
     checks.push({
       code: "openhands_api_base_missing",
@@ -110,7 +109,7 @@ export async function testEnvironment(
     level: "info",
     message: "OpenHands will run in headless mode with --override-with-envs.",
   });
-  
+
   try {
     const runtimeEnv = normalizeEnv(ensurePathInEnv({ ...process.env, ...preparedRuntimeConfig.env }));
 
@@ -140,77 +139,17 @@ export async function testEnvironment(
       }
     }
 
-    const canRunProbe =
-      checks.every((check) => check.code !== "openhands_cwd_invalid" && check.code !== "openhands_command_unresolvable");
+    const canRunProbe = checks.every(
+      (check) => check.code !== "openhands_cwd_invalid" && check.code !== "openhands_command_unresolvable",
+    );
 
+    // Validate model format (no subprocess needed — pure string check)
     let modelValidationPassed = false;
     const configuredModel = asString(config.model, "").trim();
 
-    if (canRunProbe && configuredModel) {
+    if (configuredModel) {
       try {
-        const discovery = await discoverOpenHandsModelsWithStatus({ command, cwd, env: runtimeEnv });
-        if (discovery.unsupported) {
-          checks.push({
-            code: "openhands_models_cmd_unsupported",
-            level: "warn",
-            message: "OpenHands `models` subcommand is not available in this version. Model validation skipped.",
-            hint: "The configured model will be validated at runtime by OpenHands itself.",
-          });
-        } else if (discovery.models.length > 0) {
-          checks.push({
-            code: "openhands_models_discovered",
-            level: "info",
-            message: `Discovered ${discovery.models.length} model(s) from OpenHands providers.`,
-          });
-        } else {
-          checks.push({
-            code: "openhands_models_empty",
-            level: "error",
-            message: "OpenHands returned no models.",
-            hint: "Run `openhands models` and verify provider authentication.",
-          });
-        }
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        checks.push({
-          code: "openhands_models_discovery_failed",
-          level: "error",
-          message: errMsg || "OpenHands model discovery failed.",
-          hint: "Run `openhands models` manually to verify provider auth and config.",
-        });
-      }
-    } else if (canRunProbe && !configuredModel) {
-      try {
-        const discovery = await discoverOpenHandsModelsWithStatus({ command, cwd, env: runtimeEnv });
-        if (discovery.models.length > 0) {
-          checks.push({
-            code: "openhands_models_discovered",
-            level: "info",
-            message: `Discovered ${discovery.models.length} model(s) from OpenHands providers.`,
-          });
-        }
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        checks.push({
-          code: "openhands_models_discovery_failed",
-          level: "warn",
-          message: errMsg || "OpenHands model discovery failed (best-effort, no model configured).",
-          hint: "Run `openhands models` manually to verify provider auth and config.",
-        });
-      }
-    }
-
-    const modelUnavailable = checks.some((check) => check.code === "openhands_hello_probe_model_unavailable");
-    if (!configuredModel && !modelUnavailable) {
-      // No model configured – skip model requirement if no model-related checks exist
-    } else if (configuredModel && canRunProbe) {
-      try {
-        await ensureOpenHandsModelConfiguredAndAvailable({
-          model: configuredModel,
-          command,
-          cwd,
-          env: runtimeEnv,
-        });
+        await ensureOpenHandsModelConfiguredAndAvailable({ model: configuredModel });
         checks.push({
           code: "openhands_model_configured",
           level: "info",
@@ -222,18 +161,18 @@ export async function testEnvironment(
           code: "openhands_model_invalid",
           level: "error",
           message: err instanceof Error ? err.message : "Configured model is unavailable.",
-          hint: "Run `openhands models` and choose a currently available provider/model ID.",
+          hint: "Model must be in provider/model format (e.g. openai/mountainlabs-main).",
         });
       }
     }
 
+    // Run a quick "hello" probe to verify end-to-end connectivity
     if (canRunProbe && modelValidationPassed) {
       const extraArgs = (() => {
         const fromExtraArgs = asStringArray(config.extraArgs);
         if (fromExtraArgs.length > 0) return fromExtraArgs;
         return asStringArray(config.args);
       })();
-      const probeModel = configuredModel;
 
       const args = ["--headless", "--json", "--override-with-envs", "-t", "Respond with hello."];
       if (extraArgs.length > 0) args.push(...extraArgs);
