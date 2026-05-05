@@ -31,6 +31,59 @@ import { removeMaintainerOnlySkillSymlinks } from "@paperclipai/adapter-utils/se
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 /**
+ * Resolve an adapter config env value that may be:
+ * - A plain string → return as-is
+ * - A secret_ref object { type: "secret_ref", secretId: "..." } → fetch the
+ *   resolved value from the Paperclip secrets API at runtime.
+ * - A plain-value object { type: "plain", value: "..." } → extract .value
+ * - Anything else → return empty string.
+ *
+ * Paperclip stores env values as secret_ref or plain objects but doesn't
+ * always resolve them before passing config to third-party adapters.
+ * This helper ensures the adapter gets actual string values.
+ */
+async function resolveEnvValue(rawValue: unknown): Promise<string> {
+  if (typeof rawValue === "string") return rawValue;
+  if (
+    typeof rawValue === "object" &&
+    rawValue !== null
+  ) {
+    const obj = rawValue as Record<string, unknown>;
+    // Handle { type: "plain", value: "..." }
+    if (obj.type === "plain" && typeof obj.value === "string") {
+      return obj.value;
+    }
+    // Handle { type: "secret_ref", secretId: "..." }
+    if (obj.type === "secret_ref" && typeof obj.secretId === "string") {
+      const apiUrl = process.env.PAPERCLIP_API_URL ?? process.env.PAPERCLIP_RUNTIME_API_URL ?? "";
+      const apiKey = process.env.PAPERCLIP_API_KEY ?? "";
+      if (apiUrl && apiKey) {
+        try {
+          const res = await fetch(
+            `${apiUrl}/secrets/${obj.secretId}/resolve`,
+            {
+              headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+              },
+              signal: AbortSignal.timeout(5000),
+            },
+          );
+          if (res.ok) {
+            const data = (await res.json()) as { value?: string };
+            if (typeof data.value === "string") return data.value;
+          }
+        } catch {
+          // Fall through to empty string
+        }
+      }
+      return "";
+    }
+  }
+  return "";
+}
+
+/**
  * Detect whether the child process was terminated by an external signal
  * (SIGTERM / SIGHUP) sent by the Paperclip supervisor to cancel a run.
  *
@@ -281,8 +334,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   
   // OpenHands requires both OPENAI_API_KEY and OPENAI_API_BASE for compatibility
   // LLM_API_KEY and LLM_BASE_URL are the preferred way, but we set both
-  const llmApiKey = asString(envConfig.LLM_API_KEY ?? envConfig.OPENAI_API_KEY, "");
-  const llmBaseUrl = asString(envConfig.LLM_BASE_URL ?? envConfig.OPENAI_API_BASE, "");
+  const llmApiKey = await resolveEnvValue(envConfig.LLM_API_KEY ?? envConfig.OPENAI_API_KEY);
+  const llmBaseUrl = await resolveEnvValue(envConfig.LLM_BASE_URL ?? envConfig.OPENAI_API_BASE);
   
   if (llmApiKey) {
     env.LLM_API_KEY = llmApiKey;
@@ -295,7 +348,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
 
   // Optional GitHub token for better repository operations
-  const githubToken = asString(envConfig.GITHUB_TOKEN, "");
+  const githubToken = await resolveEnvValue(envConfig.GITHUB_TOKEN);
   if (githubToken) {
     env.GITHUB_TOKEN = githubToken;
   }
