@@ -7,7 +7,6 @@ dist
 .DS_Store
 *.tgz
 package-lock.json
-ql -*
 coverage/
 
 # Secrets
