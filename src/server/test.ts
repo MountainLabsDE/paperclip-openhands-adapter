@@ -13,7 +13,7 @@ import {
   ensurePathInEnv,
   runChildProcess,
 } from "@paperclipai/adapter-utils/server-utils";
-import { discoverOpenHandsModels, ensureOpenHandsModelConfiguredAndAvailable } from "./models.js";
+import { discoverOpenHandsModelsWithStatus, ensureOpenHandsModelConfiguredAndAvailable } from "./models.js";
 import { parseOpenHandsJsonl } from "./parse.js";
 import { prepareOpenHandsRuntimeConfig } from "./runtime-config.js";
 
@@ -148,12 +148,19 @@ export async function testEnvironment(
 
     if (canRunProbe && configuredModel) {
       try {
-        const discovered = await discoverOpenHandsModels({ command, cwd, env: runtimeEnv });
-        if (discovered.length > 0) {
+        const discovery = await discoverOpenHandsModelsWithStatus({ command, cwd, env: runtimeEnv });
+        if (discovery.unsupported) {
+          checks.push({
+            code: "openhands_models_cmd_unsupported",
+            level: "warn",
+            message: "OpenHands `models` subcommand is not available in this version. Model validation skipped.",
+            hint: "The configured model will be validated at runtime by OpenHands itself.",
+          });
+        } else if (discovery.models.length > 0) {
           checks.push({
             code: "openhands_models_discovered",
             level: "info",
-            message: `Discovered ${discovered.length} model(s) from OpenHands providers.`,
+            message: `Discovered ${discovery.models.length} model(s) from OpenHands providers.`,
           });
         } else {
           checks.push({
@@ -174,12 +181,12 @@ export async function testEnvironment(
       }
     } else if (canRunProbe && !configuredModel) {
       try {
-        const discovered = await discoverOpenHandsModels({ command, cwd, env: runtimeEnv });
-        if (discovered.length > 0) {
+        const discovery = await discoverOpenHandsModelsWithStatus({ command, cwd, env: runtimeEnv });
+        if (discovery.models.length > 0) {
           checks.push({
             code: "openhands_models_discovered",
             level: "info",
-            message: `Discovered ${discovered.length} model(s) from OpenHands providers.`,
+            message: `Discovered ${discovery.models.length} model(s) from OpenHands providers.`,
           });
         }
       } catch (err) {

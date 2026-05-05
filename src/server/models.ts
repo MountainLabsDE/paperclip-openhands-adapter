@@ -10,6 +10,11 @@ import {
 const MODELS_CACHE_TTL_MS = 60_000;
 const MODELS_DISCOVERY_TIMEOUT_MS = 20_000;
 
+/** Matches the "invalid choice: 'models'" error from OpenHands CLI when the
+ *  `models` subcommand does not exist (removed or never added in newer versions). */
+const MODELS_CMD_UNSUPPORTED_RE =
+  /invalid choice.*['"]models['"]|unknown argument.*models|no such command.*models/i;
+
 function resolveOpenHandsCommand(input: unknown): string {
   const envOverride =
     typeof process.env.PAPERCLIP_OPENHANDS_COMMAND === "string" &&
@@ -100,11 +105,34 @@ function pruneExpiredDiscoveryCache(now: number) {
   }
 }
 
+/**
+ * Result of attempting to discover OpenHands models.
+ * When `unsupported` is true, the `models` subcommand does not exist in the
+ * installed OpenHands version and callers should fall back gracefully.
+ */
+interface ModelDiscoveryResult {
+  models: AdapterModel[];
+  unsupported: boolean;
+}
+
 export async function discoverOpenHandsModels(input: {
   command?: unknown;
   cwd?: unknown;
   env?: unknown;
 } = {}): Promise<AdapterModel[]> {
+  const result = await discoverOpenHandsModelsWithStatus(input);
+  return result.models;
+}
+
+/**
+ * Like `discoverOpenHandsModels` but also returns whether the `models`
+ * subcommand is unsupported by the installed OpenHands CLI version.
+ */
+export async function discoverOpenHandsModelsWithStatus(input: {
+  command?: unknown;
+  cwd?: unknown;
+  env?: unknown;
+} = {}): Promise<ModelDiscoveryResult> {
   const command = resolveOpenHandsCommand(input.command);
   const cwd = asString(input.cwd, process.cwd());
   const env = normalizeEnv(input.env);
@@ -139,12 +167,21 @@ export async function discoverOpenHandsModels(input: {
   if (result.timedOut) {
     throw new Error(`\`openhands models\` timed out after ${MODELS_DISCOVERY_TIMEOUT_MS / 1000}s.`);
   }
+
+  const combined = `${result.stderr}\n${result.stdout}`;
+
+  // OpenHands v1.15+ removed the `models` subcommand. Detect this and
+  // return gracefully instead of throwing, so the adapter still works.
+  if ((result.exitCode ?? 1) !== 0 && MODELS_CMD_UNSUPPORTED_RE.test(combined)) {
+    return { models: [], unsupported: true };
+  }
+
   if ((result.exitCode ?? 1) !== 0) {
     const detail = firstNonEmptyLine(result.stderr) || firstNonEmptyLine(result.stdout);
     throw new Error(detail ? `\`openhands models\` failed: ${detail}` : "`openhands models` failed.");
   }
 
-  return sortModels(parseModelsOutput(result.stdout));
+  return { models: sortModels(parseModelsOutput(result.stdout)), unsupported: false };
 }
 
 export async function discoverOpenHandsModelsCached(input: {
@@ -177,24 +214,31 @@ export async function ensureOpenHandsModelConfiguredAndAvailable(input: {
     throw new Error("OpenHands requires `adapterConfig.model` in provider/model format.");
   }
 
-  const models = await discoverOpenHandsModelsCached({
+  const discovery = await discoverOpenHandsModelsWithStatus({
     command: input.command,
     cwd: input.cwd,
     env: input.env,
   });
 
-  if (models.length === 0) {
+  // If the `models` subcommand is unsupported (OpenHands v1.15+), skip
+  // validation and trust the configured model. The model will be validated
+  // at runtime when OpenHands actually tries to use it.
+  if (discovery.unsupported) {
+    return [{ id: model, label: model }];
+  }
+
+  if (discovery.models.length === 0) {
     throw new Error("OpenHands returned no models. Run `openhands models` and verify provider auth.");
   }
 
-  if (!models.some((entry) => entry.id === model)) {
-    const sample = models.slice(0, 12).map((entry) => entry.id).join(", ");
+  if (!discovery.models.some((entry) => entry.id === model)) {
+    const sample = discovery.models.slice(0, 12).map((entry) => entry.id).join(", ");
     throw new Error(
-      `Configured OpenHands model is unavailable: ${model}. Available models: ${sample}${models.length > 12 ? ", ..." : ""}`,
+      `Configured OpenHands model is unavailable: ${model}. Available models: ${sample}${discovery.models.length > 12 ? ", ..." : ""}`,
     );
   }
 
-  return models;
+  return discovery.models;
 }
 
 export async function listOpenHandsModels(): Promise<AdapterModel[]> {
