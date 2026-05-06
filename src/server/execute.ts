@@ -262,7 +262,30 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     config.promptTemplate,
     DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   );
-  const command = asString(config.command, "openhands");
+  // Sanitize the command: strip deprecated OpenHands subcommands (e.g. "chat")
+  // that were valid in older versions but removed in newer CLI versions.
+  // OpenHands >= 0.15 no longer supports positional subcommands like `chat`.
+  const rawCommand = asString(config.command, "openhands");
+  const DEPRECATED_OPENHANDS_SUBCOMMANDS = ["chat", "code", "run", "ask"];
+  const commandParts = rawCommand.trim().split(/\s+/);
+  const baseCommand = commandParts[0] || "openhands";
+  const trailingParts = commandParts.slice(1);
+  const strippedSubcommands: string[] = [];
+  const cleanTrailing = trailingParts.filter((part) => {
+    if (DEPRECATED_OPENHANDS_SUBCOMMANDS.includes(part)) {
+      strippedSubcommands.push(part);
+      return false;
+    }
+    return true;
+  });
+  const command = [baseCommand, ...cleanTrailing].join(" ") || "openhands";
+  if (strippedSubcommands.length > 0) {
+    await onLog(
+      "stdout",
+      `[paperclip] Warning: stripped deprecated OpenHands subcommand(s) "${strippedSubcommands.join(", ")}" from command config. ` +
+        `Modern OpenHands CLI does not use positional subcommands. Using "${command}" instead.\n`,
+    );
+  }
   const model = asString(config.model, "").trim();
 
   const workspaceContext = parseObject(context.paperclipWorkspace);
@@ -341,6 +364,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // Inject the Paperclip API token so the agent can call back to update issue status
   if (!hasExplicitApiKey && authToken) {
     env.PAPERCLIP_API_KEY = authToken;
+  }
+
+  // Fallback: if the runtime didn't provide authToken (some Paperclip versions
+  // don't pass it to local adapters), capture PAPERCLIP_API_KEY from the
+  // server's own process.env before sanitizeInheritedPaperclipEnv strips it.
+  if (!env.PAPERCLIP_API_KEY && typeof process.env.PAPERCLIP_API_KEY === "string" && process.env.PAPERCLIP_API_KEY.trim()) {
+    env.PAPERCLIP_API_KEY = process.env.PAPERCLIP_API_KEY;
   }
 
   // Set LLM environment variables for OpenHands
