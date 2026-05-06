@@ -230,13 +230,29 @@ function buildPaperclipApiInstructions(ctx: {
     '  -d \'{"status": "in_progress", "assigneeAgentId": "' + ctx.agentId + '"}\'',
     "```",
     "",
-    "### Important rules",
-    "- Always post a comment when you complete work or make significant progress.",
-    "- Always update the issue status (e.g., to `done` when finished, `blocked` if you cannot proceed).",
-    "- Include a summary of what you did in your completion comment.",
-    "- Use `$PAPERCLIP_API_URL` and `$PAPERCLIP_API_KEY` environment variables (they are already set).",
+    "### MANDATORY rules (you MUST follow these)",
+    "- **MANDATORY**: Post a comment on the current issue BEFORE you start working (your plan).",
+    "- **MANDATORY**: Post a comment when you complete work or make significant progress.",
+    "- **MANDATORY**: Update the issue status to `done` when finished, `in_progress` when starting, `blocked` if you cannot proceed.",
+    "- **MANDATORY**: Include a summary of what you did in your completion comment.",
+    "- Use `$PAPERCLIP_API_URL` and `$PAPERCLIP_API_KEY` environment variables (they are already set in your shell).",
+    "- Use `run_bash` to execute the curl commands shown above.",
   ];
+
   return lines.join("\n");
+}
+
+/**
+ * Build a closing reminder that the agent must post a completion comment.
+ * This is appended at the very end of the prompt as a final nudge.
+ */
+function buildPaperclipClosingReminder(): string {
+  return [
+    "",
+    "---",
+    "**REMINDER**: Before finishing, you MUST post a completion comment on the current issue via the Paperclip API (see the Paperclip API section above for curl commands). Also update the issue status to `done` if the task is complete. Failure to do so means your work will not be visible to your team.",
+    "",
+  ].join("\n");
 }
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
@@ -445,13 +461,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     companyId: agent.companyId,
     agentId: agent.id,
   });
+  const paperclipClosingReminder = buildPaperclipClosingReminder();
   const prompt = joinPromptSections([
     instructionsPrefix,
+    paperclipApiInstructions,
     renderedBootstrapPrompt,
     wakePrompt,
     sessionHandoffNote,
     renderedPrompt,
-    paperclipApiInstructions,
+    paperclipClosingReminder,
   ]);
   const promptMetrics = {
     promptChars: prompt.length,
