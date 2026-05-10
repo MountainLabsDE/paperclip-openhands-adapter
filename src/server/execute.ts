@@ -357,8 +357,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (agentHome) env.AGENT_HOME = agentHome;
   if (workspaceHints.length > 0) env.PAPERCLIP_WORKSPACES_JSON = JSON.stringify(workspaceHints);
 
+  // Resolve all env config values — handle plain strings directly,
+  // and use resolveEnvValue() for secret_ref / plain objects.
+  // Previously this loop only copied string values, silently dropping
+  // secret_ref objects for any key not explicitly handled below.
   for (const [key, value] of Object.entries(envConfig)) {
-    if (typeof value === "string") env[key] = value;
+    if (typeof value === "string") {
+      env[key] = value;
+    } else {
+      env[key] = await resolveEnvValue(value);
+    }
   }
 
   // Inject the Paperclip API token so the agent can call back to update issue status
