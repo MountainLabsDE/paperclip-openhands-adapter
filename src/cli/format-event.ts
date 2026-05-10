@@ -39,9 +39,23 @@ function errorText(value: unknown): string {
   }
 }
 
+/** Extract text from an OpenHands llm_message.content array. */
+function extractContentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map((item) => asString(item.text, "").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function printOpenHandsStreamEvent(raw: string, _debug: boolean): void {
   const line = raw.trim();
   if (!line) return;
+
+  // Skip the --JSON Event-- separator marker lines
+  if (/^--JSON Event--\s*$/.test(line)) return;
 
   const parsed = asRecord(safeJsonParse(line));
   if (!parsed) {
@@ -49,6 +63,62 @@ export function printOpenHandsStreamEvent(raw: string, _debug: boolean): void {
     return;
   }
 
+  // --- New --json format: events have a `kind` field ---
+  const kind = asString(parsed.kind, "").trim();
+
+  if (kind === "MessageEvent") {
+    const source = asString(parsed.source, "").trim();
+    const llmMessage = asRecord(parsed.llm_message);
+    if (llmMessage) {
+      const text = extractContentText(llmMessage.content).trim();
+      if (!text) return;
+      if (source === "agent") {
+        console.log(pc.green(`assistant: ${text}`));
+      } else {
+        console.log(pc.cyan(`user: ${text}`));
+      }
+      return;
+    }
+    // Fallback to legacy fields
+    const text = asString(parsed.message) || asString(parsed.text) || asString(parsed.content);
+    const trimmed = text.trim();
+    if (trimmed) console.log(pc.green(`assistant: ${trimmed}`));
+    return;
+  }
+
+  if (kind === "ObservationEvent") {
+    const observation = asRecord(parsed.observation);
+    if (observation) {
+      const isError = asString(observation.is_error, "") === "true" || observation.is_error === true;
+      if (isError) {
+        const text = extractContentText(observation.content).trim();
+        if (text) console.log(pc.red(`error: ${text}`));
+        return;
+      }
+      const toolName = asString(observation.tool_name, "");
+      if (toolName) {
+        console.log(pc.gray(`tool_result: ${toolName} completed`));
+      }
+    }
+    return;
+  }
+
+  if (kind === "ActionEvent") {
+    const action = asRecord(parsed.action);
+    if (action) {
+      const actionType = asString(action.action_type, "").trim();
+      if (actionType === "run" || actionType === "run_ipython") {
+        const command = asString(action.command, "");
+        console.log(pc.yellow(`tool_call: ${actionType}${command ? ` \`${command}\`` : ""}`));
+      } else if (actionType === "message") {
+        const text = extractContentText(action.content).trim();
+        if (text) console.log(pc.green(`assistant: ${text}`));
+      }
+    }
+    return;
+  }
+
+  // --- Legacy format: events have a `type` field ---
   const type = asString(parsed.type) || asString(parsed.event_type);
 
   if (type === "step_start") {
