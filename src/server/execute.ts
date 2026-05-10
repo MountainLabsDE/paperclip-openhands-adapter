@@ -358,7 +358,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (workspaceHints.length > 0) env.PAPERCLIP_WORKSPACES_JSON = JSON.stringify(workspaceHints);
 
   for (const [key, value] of Object.entries(envConfig)) {
-    if (typeof value === "string") env[key] = value;
+    if (typeof value === "string") {
+      env[key] = value;
+    } else {
+      const resolved = await resolveEnvValue(value);
+      if (resolved) env[key] = resolved;
+    }
   }
 
   // Inject the Paperclip API token so the agent can call back to update issue status
